@@ -1,26 +1,82 @@
-# HTML
-# Archive your static HTML project and save it with the build record.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
-- main
+  - main
+  - master
 
 pool:
-  vmImage: ubuntu-latest
+  vmImage: 'ubuntu-latest'
 
-steps:
-- task: CopyFiles@2
-  inputs:
-    Contents: '**'
-    TargetFolder: '$(build.artifactstagingdirectory)'
-- task: PublishBuildArtifacts@1
-  inputs:
-    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-    ArtifactName: 'htmlfile'
-    publishLocation: 'Container'
-- task: ArchiveFiles@2
-  inputs:
-    rootFolderOrFile: '$(build.sourcesDirectory)'
-    includeRootFolder: false
-- task: PublishBuildArtifacts@1
+variables:
+  # Alter this if your built files go to a different directory (e.g., 'dist', 'build', or '.')
+  buildOutputDirectory: 'dist' 
+  artifactName: 'drop'
+
+stages:
+- stage: Build
+  displayName: 'Build Website Stage'
+  jobs:
+  - job: BuildJob
+    displayName: 'Compile and Package'
+    steps:
+    
+    # Step 1: Install Node.js (Uncomment if your project uses npm/yarn)
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '18.x'
+      displayName: 'Install Node.js'
+
+    # Step 2: Install dependencies and build (Uncomment if using a framework like React/Vue/Angular)
+    - script: |
+        npm install
+        npm run build --if-present
+      displayName: 'npm install and build'
+
+    # Step 3: Archive the build output files into a zip
+    # If it's a pure static HTML website with no build step, change rootFolderOrFile to '.'
+    - task: ArchiveFiles@2
+      displayName: 'Archive build files'
+      inputs:
+        rootFolderOrFile: '$(buildOutputDirectory)'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+        replaceExistingArchive: true
+
+    # Step 4: Publish the ZIP file as a pipeline artifact
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+        ArtifactName: '$(artifactName)'
+        publishLocation: 'Container'
+
+- stage: Deploy
+  displayName: 'Deploy Stage'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - deployment: DeployWebsite
+    displayName: 'Deploy to Azure Web App'
+    environment: 'production' # Connects to your Azure DevOps environment approvals
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          # Step 5: Download the published artifact from the Build stage
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: '$(artifactName)'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          # Step 6: Deploy to Azure Web App service
+          # Note: You will need to create an Azure Resource Manager service connection 
+          # and substitute your actual service connection name and app name below.
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Azure Web App Deploy'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'YOUR_AZURE_SERVICE_CONNECTION_NAME'
+              appType: 'webAppLinux' # or 'webApp' for Windows
+              WebAppName: 'YOUR_AZURE_WEB_APP_NAME'
+              Package: '$(System.ArtifactsDirectory)/$(artifactName)/$(Build.BuildId).zip'
